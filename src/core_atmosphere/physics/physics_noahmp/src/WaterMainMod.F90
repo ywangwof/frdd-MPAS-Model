@@ -35,7 +35,7 @@ contains
     associate(                                                                       &
               MainTimeStep           => noahmp%config%domain%MainTimeStep           ,& ! in,    noahmp main time step [s]
               SoilTimeStep           => noahmp%config%domain%SoilTimeStep           ,& ! in,    soil process timestep [s]
-              SurfaceType            => noahmp%config%domain%SurfaceType            ,& ! in,    surface type 1-soil; 2-lake 
+              SurfaceType            => noahmp%config%domain%SurfaceType            ,& ! in,    surface type 1-soil; 2-lake
               FlagCropland           => noahmp%config%domain%FlagCropland           ,& ! in,    flag to identify croplands
               FlagUrban              => noahmp%config%domain%FlagUrban              ,& ! in,    urban point flag
               FlagSoilProcess        => noahmp%config%domain%FlagSoilProcess        ,& ! in,    flag to calculate soil processes
@@ -61,7 +61,7 @@ contains
               SoilMoisture           => noahmp%water%state%SoilMoisture             ,& ! inout, total soil moisture [m3/m3]
               WaterStorageLake       => noahmp%water%state%WaterStorageLake         ,& ! inout, water storage in lake (can be negative) [mm]
               PondSfcThinSnwMelt     => noahmp%water%state%PondSfcThinSnwMelt       ,& ! inout, surface ponding [mm] from snowmelt when thin snow has no layer
-              WaterHeadSfc           => noahmp%water%state%WaterHeadSfc             ,& ! inout, surface water head (mm) 
+              WaterHeadSfc           => noahmp%water%state%WaterHeadSfc             ,& ! inout, surface water head (mm)
               IrrigationAmtFlood     => noahmp%water%state%IrrigationAmtFlood       ,& ! inout, flood irrigation water amount [m]
               IrrigationAmtMicro     => noahmp%water%state%IrrigationAmtMicro       ,& ! inout, micro irrigation water amount [m]
               SoilSfcInflow          => noahmp%water%flux%SoilSfcInflow             ,& ! inout, water input on soil surface [m/s]
@@ -163,7 +163,7 @@ contains
     ! calculate soil process only at soil timestep
     SoilSfcInflowAcc     = SoilSfcInflowAcc     + SoilSfcInflow
     EvapSoilSfcLiqAcc    = EvapSoilSfcLiqAcc    + EvapSoilSfcLiq
-    TranspWatLossSoilAcc = TranspWatLossSoilAcc + TranspWatLossSoil
+    TranspWatLossSoilAcc(:) = TranspWatLossSoilAcc(:) + TranspWatLossSoil(:)
 
     ! start soil water processes
     if ( FlagSoilProcess .eqv. .true. ) then
@@ -178,7 +178,7 @@ contains
        ! compute mean water flux during soil timestep
        SoilSfcInflowMean     = SoilSfcInflowAcc / NumSoilTimeStep
        EvapSoilSfcLiqMean    = EvapSoilSfcLiqAcc / NumSoilTimeStep
-       TranspWatLossSoilMean = TranspWatLossSoilAcc / NumSoilTimeStep
+       TranspWatLossSoilMean = TranspWatLossSoilAcc(:) / NumSoilTimeStep
 
        ! lake/soil water balances
        if ( SurfaceType == 2 ) then   ! lake

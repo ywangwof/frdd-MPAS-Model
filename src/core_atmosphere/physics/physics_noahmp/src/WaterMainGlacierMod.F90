@@ -80,7 +80,7 @@ contains
     ! prepare for water process
     SoilIce(:)         = max(0.0, SoilMoisture(:)-SoilLiqWater(:))
     SoilIceTmp         = SoilIce
-    SoilLiqWaterTmp    = SoilLiqWater      
+    SoilLiqWaterTmp    = SoilLiqWater
     SnowWaterEquivPrev = SnowWaterEquiv
 
     ! compute soil/snow surface evap/dew rate based on energy flux
@@ -122,11 +122,11 @@ contains
                              SoilIceTmp(LoopInd) + SoilLiqWater(LoopInd) - SoilLiqWaterTmp(LoopInd))
        enddo
        WatReplaceSublim    = WatReplaceSublim * 1000.0 / MainTimeStep     ! convert to [mm/s]
-       SoilIce = min(1.0, SoilIceTmp)
+       SoilIce(:) = min(1.0, SoilIceTmp(:))
     elseif ( OptGlacierTreatment == 2 ) then
-       SoilIce = 1.0
+       SoilIce(:) = 1.0
     endif
-    SoilLiqWater = 1.0 - SoilIce
+    SoilLiqWater(:) = 1.0 - SoilIce(:)
 
     ! use RunoffSubsurface as a water balancer, GlacierExcessFlow is snow that disappears, WatReplaceSublim is
     ! water from below that replaces glacier loss
@@ -150,7 +150,7 @@ contains
     ! deallocate local arrays to avoid memory leaks
     deallocate(SoilIceTmp     )
     deallocate(SoilLiqWaterTmp)
- 
+
     end associate
 
   end subroutine WaterMainGlacier

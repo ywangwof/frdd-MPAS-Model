@@ -31,7 +31,7 @@ contains
     real(kind=kind_noahmp), allocatable, dimension(:), intent(inout) :: MatLeft3    ! left-hand side term of the matrix
 
 ! local variable
-    integer                                           :: LoopInd                    ! soil layer loop index 
+    integer                                           :: LoopInd                    ! soil layer loop index
     real(kind=kind_noahmp)                            :: WatDefiTmp                 ! temporary water deficiency
     real(kind=kind_noahmp), allocatable, dimension(:) :: MatRightTmp                ! temporary MatRight matrix coefficient
     real(kind=kind_noahmp), allocatable, dimension(:) :: MatLeft3Tmp                ! temporary MatLeft3 matrix coefficient
@@ -135,7 +135,7 @@ contains
        SoilLiqWater(NumSoilLayer)    = min(SoilEffPorosity(NumSoilLayer), SoilLiqWater(NumSoilLayer))
     endif
 
-    SoilMoisture = SoilLiqWater + SoilIce
+    SoilMoisture(:) =  SoilLiqWater(:) + SoilIce(:)
 
     ! deallocate local arrays to avoid memory leaks
     deallocate(MatRightTmp)
