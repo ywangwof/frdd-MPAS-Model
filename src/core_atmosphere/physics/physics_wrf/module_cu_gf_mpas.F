@@ -90,8 +90,8 @@ CONTAINS
 !-----------------------------------------------------------------------------------------------------------------
 
 !intent arguments:
- integer,intent(in):: ids,ide,jds,jde,kds,kde, & 
-                      ims,ime,jms,jme,kms,kme, & 
+ integer,intent(in):: ids,ide,jds,jde,kds,kde, &
+                      ims,ime,jms,jme,kms,kme, &
                       its,ite,jts,jte,kts,kte
 
  integer,intent(in):: sub3d,ichoice_deep,ichoice_shallow,itimestep
@@ -174,7 +174,7 @@ CONTAINS
  real,dimension (its:ite)          :: edto,edtd,edtm,frh_out,frhm,frhs
  real                              :: rain_thresh
  real,dimension (its:ite,kts:kte)  :: zuo,zdo,zum,zus,zdm,zdd,cnvwt,cnvwtm,cnvwts
-  
+
  itf = min(ite,ide-1)
  ktf = min(kte,kde-1)
  jtf = min(jte,jde-1)
@@ -238,7 +238,7 @@ CONTAINS
        edti_out(i,j)   = 0.
        gswi(i,j)       = gsw(i,j)
     enddo
- 
+
 
        do k = kts, ktf
           do i = its, ite
@@ -374,8 +374,8 @@ CONTAINS
        enddo
        do i = its, itf
           if(mconv(i) .le. mc_thresh(i)) then
-                ierr(i)=42 
-                ierrm(i)=42 
+                ierr(i)=42
+                ierrm(i)=42
                 mconv(i) = 0.
           endif
        !   if((dx_loc(i)<6500.).and.(trim(pbl_scheme)=="bl_mynn").and.(maxmf(i,jts).gt.0.))ierr(i)=555
@@ -383,7 +383,7 @@ CONTAINS
           if(bilbc(i,j).eq.7)ierr(i)=556
           factor(i)=(6.-float(bilbc(i,j)))/7.+1./7.
           if(bilbc(i,j) == 0 )factor(i)=1.
-! for high resolution runs, turn off convection if there is already significant precipitation from microphysics          
+! for high resolution runs, turn off convection if there is already significant precipitation from microphysics
           if(rainncv(i,j)/dt*3600. > rain_thresh .and. dx_loc(i) < 6500. .and. sub3d == 1)ierr(i)=44
        enddo
 
@@ -391,20 +391,20 @@ CONTAINS
        do i = its, itf
           zrho  = 100.*psur(i)/(287.04*(t2d(i,1)*(1.+0.608*q2d(i,1))))
 
-          !- le and h fluxes 
-          pahfs = -hfx(i,j) 
-          pqhfl = -qfx(i,j)/xlv 
+          !- le and h fluxes
+          pahfs = -hfx(i,j)
+          pqhfl = -qfx(i,j)/xlv
           !- buoyancy flux (h+le)
           zkhvfl = (pahfs/1004.64+0.608*t2d(i,1)*pqhfl)/zrho
           !- height of the 1st level
-          pgeoh = zo(i,1)-ht(i,j) 
+          pgeoh = zo(i,1)-ht(i,j)
           !-convective-scale velocity w*
           zws = max(0.,0.001-1.5*0.41*zkhvfl*pgeoh/t2d(i,1))
 
           if(zws > tiny(pgeoh)) then
             !-convective-scale velocity w*
             zws = 1.2*zws**.3333
-            !- temperature excess 
+            !- temperature excess
             ztexec(i)     = max(-1.5*pahfs/(zrho*zws*1004.64),0.0)
             !- moisture  excess
             zqexec(i)     = max(-1.5*pqhfl/(zrho*zws),0.)
@@ -594,7 +594,7 @@ CONTAINS
               ,zum           &  ! nomalized downdraft mass flux from mid scheme
               ,edto          &  !
               ,edtm          &  !
-              ,xmb           &  ! 
+              ,xmb           &  !
               ,xmbm          &  !
               ,xmbs          &  !
               ,pret          &  !
@@ -624,13 +624,13 @@ CONTAINS
               ,rand_vmas     &  ! for stochastics vertmass, if temporal and spatial patterns exist
               ,rand_clos     &  ! for stochastics closures, if temporal and spatial patterns exist
               ,nranflag      &  ! flag to what you want perturbed
-                                !! 1 = momentum transport 
+                                !! 1 = momentum transport
                                 !! 2 = normalized vertical mass flux profile
                                 !! 3 = closures
                                 !! more is possible, talk to developer or
                                 !! implement yourself. pattern is expected to be
                                 !! betwee -1 and +1
-              ,do_capsuppress,cap_suppress_j    &    !         
+              ,do_capsuppress,cap_suppress_j    &    !
               ,k22                              &    !
               ,jmin)                         !
       call neg_check('deep',j,dt,qcheck,outq,subten_q,outt,subten_t,  &
@@ -644,7 +644,7 @@ CONTAINS
 !               pret,p2d,outts,outqs,dt,itimestep,psur,us,vs,tcrit,ztexec,  &
 !               zqexec,ccn,ccnclean,rhoi,dx_loc,area_loc,dhdt,kpbli,kbcons, &
 !               ktops,cupclws,k22s,xlandi,gswi,tscl_kf,xlv,r_v,cp,g,        &
-!               ichoice_shallow,0,0,ierrs,ierrcs,autoconv,itf,jtf,ktf,      & 
+!               ichoice_shallow,0,0,ierrs,ierrcs,autoconv,itf,jtf,ktf,      &
 !               use_excess_sh,its,ite,jts,jte,kts,kte)
              !> - Call shallow: cu_gf_sh_run()
 !
@@ -684,7 +684,7 @@ CONTAINS
 !          if(outt(i,10)*86400. .lt.-1000. .or. subten_t(i,10)*86400. .gt. 1000)print*,'gfmpas2',outt(i,25)*86400.,subten_t(i,25)*86400.
           ktopmax=max(ktopm(i),ktop(i),ktops(i))
           kbconmax=max(kbconm(i),kbcon(i),kbcons(i))
-          
+
           if(ktopmax > htop(i,j) ) htop(i,j) = ktopmax + .001
           if(kbconmax < hbot(i,j)) hbot(i,j) = kbconmax + .001
        else if (ierr(i).gt.0) then
@@ -707,10 +707,10 @@ CONTAINS
 
 !---temporary setting -- must be removed once the subsidence tendencies are correct
                   !sub3d_rthcuten(i,k,j) = 2.e-5
-                  !sub3d_rqvcuten(i,k,j) = 3.e-8 
-                  !sub3d_rucuten (i,k,j) = 4.e-7 
+                  !sub3d_rqvcuten(i,k,j) = 3.e-8
+                  !sub3d_rucuten (i,k,j) = 4.e-7
                   !sub3d_rvcuten (i,k,j) = 5.e-7
-!---temporary setting -- 
+!---temporary setting --
 
           gf_mfx(i,k) =xmb(i)*zuo(i,k)+xmbm(i)*zum(i,k)+xmbs(i)*zus(i,k)
           if(t2d(i,k) .lt. tcrit) then
@@ -774,7 +774,7 @@ CONTAINS
 !
          do i=its,ite
            if(raincv (i,1) > 0.0 .and. htop(i,1) > 0) then
-             factor(i) = -2./max(1000., zo(i,htop(i,1)) - zfrz(i))
+             factor(i) = -2./max(1000., zo(i,int(htop(i,1))) - zfrz(i))
            endif
          enddo
 
@@ -841,7 +841,7 @@ CONTAINS
       !!      modified    20/03/2002 : add convective Sigma_s and improve turbulent
       !!                               length-scale in boundary-layer and near tropopause
       !!      adapted     09/12/2016 : adapted to GEOS-5 by Saulo Freitas
-      !!      adapted     24/04/2024 : adapted to MPAS/MONAN by Saulo Freitas 
+      !!      adapted     24/04/2024 : adapted to MPAS/MONAN by Saulo Freitas
       !-------------------------------------------------------------------------------
       !*       0.    DECLARATIONS
       !              ------------
@@ -891,7 +891,7 @@ CONTAINS
       real, dimension(ims:ime,kms:kme), intent(in):: zgrid,gf_mfx
       real, dimension(ims:ime,jms:jme),         intent(in):: xland
       ! fractional cloudiness (between 0 and 1)
-      real, dimension(ims:ime,kms:kme,jms:jme), intent(inout):: cldfra  
+      real, dimension(ims:ime,kms:kme,jms:jme), intent(inout):: cldfra
 
       !
       !*       0.1   Declarations of local variables :
@@ -935,7 +935,7 @@ CONTAINS
       !-------------------------------------------------------------------------------
       !
       do j = jts,jte
-      
+
       do k = kts,kte
       do i = its,ite
          cldfra(i,k,j) = 0.0
@@ -949,7 +949,7 @@ CONTAINS
       enddo
       enddo
 
-     
+
       !JKT = KTE+1-KTS
       !-will limit the model vertical column to 60 hPa
       ! do K=KTE,KTS,-1
@@ -1012,7 +1012,7 @@ CONTAINS
          do i = its,ite
             !--only allowed above the boundary layer
             if(k <= kpbl(i,j)) cycle
-            
+
             ZTEMP  = PT(i,k)
 
             !latent heat of vaporisation/sublimation
@@ -1082,13 +1082,13 @@ CONTAINS
              !- zsigma should be of order 4.e-4 in lowest 5 km of atmosphere
              ZSIGMA_NOCONV = MAX( ZSIGMA_NOCONV, 1.e-10 )
              ZQ1_NOCONV = ZSBAR / ZSIGMA_NOCONV
-      
+
              !- cloud fraction associated with ONLY convective part ("total-turb")
              PCLDFR(i,k) = 0.36*(ATAN(1.55*ZQ1)-ATAN(1.55*ZQ1_NOCONV))
-      
+
              PCLDFR(i,k) = MAX( 0., MIN(1.,PCLDFR(i,k)) )
              CLDFRA(I,K,J) = PCLDFR(i,k)
-       
+
          endif
       !
       !    cycle
