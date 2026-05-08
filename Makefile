@@ -465,7 +465,7 @@ intel-mpi:   # BUILDTARGET Intel compiler suite with Intel MPI library
 	"CC_SERIAL = icc" \
 	"CXX_SERIAL = icpc" \
 	"FFLAGS_PROMOTION = -real-size 64" \
-	"FFLAGS_OPT = -O3 -convert big_endian -free -align array64byte" \
+	"FFLAGS_OPT = -O3 -convert big_endian -free -align array64byte -diag-disable=10448" \
 	"CFLAGS_OPT = -O3" \
 	"CXXFLAGS_OPT = -O3" \
 	"LDFLAGS_OPT = -O3" \
@@ -519,7 +519,7 @@ intel-mpi-ursa:   # usra
 	"CC_SERIAL = icx" \
 	"CXX_SERIAL = icpx" \
 	"FFLAGS_PROMOTION = -real-size 64" \
-	"FFLAGS_OPT = -O3 -convert big_endian -free -align array64byte" \
+	"FFLAGS_OPT = -O3 -convert big_endian -free -align array64byte -diag-disable=10448" \
 	"CFLAGS_OPT = -O3" \
 	"CXXFLAGS_OPT = -O3" \
 	"LDFLAGS_OPT = -O3" \

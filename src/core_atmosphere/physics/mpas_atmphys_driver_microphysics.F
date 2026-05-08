@@ -27,13 +27,15 @@
  use mp_wsm6,only: mp_wsm6_init,refl10cm_wsm6
  use module_mp_nssl_2mom, only : nssl_2mom_driver
  use mp_nssl, only: mp_nssl_init
+ use nssl_reflectivity_calculations, only: compute_nssl_reflectivity
 
  implicit none
  private
- public:: allocate_microphysics,   &
-          deallocate_microphysics, &
-          driver_microphysics,     &
-          init_microphysics
+ public:: allocate_microphysics,      &
+          deallocate_microphysics,    &
+          driver_microphysics,        &
+          init_microphysics,          &
+          init_reflectivity_diagnostic
 
 
 !MPAS driver for parameterization of cloud microphysics processes.
@@ -521,7 +523,7 @@
        i = 1 ! always treat CCN as CCNA (for now)
        nml_name = 'namelist.atmosphere' ! at some point need to get name if -n option is used
        call mp_nssl_init( errflg=errflg, errmsg=errmsg, threads=1, restart=.false., &
-                              fn_nml=nml_name,                                   & 
+                              fn_nml=nml_name,                                   &
                               mpirank = dminfo%my_proc_id, mpiroot = IO_NODE,    &
                               con_g=gravity, con_rd=R_d, con_cp=cp, con_rv=R_v,  &
                               con_t0c=t00, con_cliq=cliq, con_csol=cice, con_eps=ep_2,   &
@@ -530,7 +532,7 @@
                               nssl_alphar=config_nssl_alphar, nssl_ehw0=config_nssl_ehw0, nssl_ehlw0=config_nssl_ehlw0,   &
                               nssl_ccn_on=config_nssl_ccn_on, nssl_hail_on=config_nssl_hail_on, nssl_invertccn=.false., &
                               nssl_3moment=config_nssl_3moment, nssl_ccn_is_ccna=i )
-     
+
     case("mp_wsm6")
        call mp_wsm6_init(den0=rho_a,denr=rho_r,dens=rho_s,cl=cliq,cpv=cpv, &
                          hail_opt=hail_opt,errmsg=errmsg,errflg=errflg)
@@ -632,7 +634,7 @@
        if (allocated(nwfa_p) .and. allocated(nwfa2d_p)) then
          call tempo_aerosol_surface_emissions(dt=dt_microp, nwfa=nwfa_p, nwfa2d=nwfa2d_p, &
             ims=ims, ime=ime, jms=jms, jme=jme, kms=kms, kme=kme, kts=kts)
-       endif   
+       endif
 
        call mpas_timer_start('mp_tempo')
 
@@ -646,7 +648,7 @@
             ng      = ng_p       , qb         = volg_p    , w      = w_p     , &
             nc      = nc_p       , nwfa       = nwfa_p    , nifa   = nifa_p  , &
             pii     = pi_p       , p          = pres_p    , dz     = dz_p    , &
-            qc_bl   = qcbl_p     , qcfrac_bl  = cldfrac_p                    , &          
+            qc_bl   = qcbl_p     , qcfrac_bl  = cldfrac_p                    , &
             ids = ids , ide = ide , jds = jds , jde = jde , kds = kds , kde = kde , &
             ims = ims , ime = ime , jms = jms , jme = jme , kms = kms , kme = kme , &
             its = its , ite = ite , jts = jts , jte = jte , kts = kts , kte = kte , &
@@ -683,7 +685,7 @@
        istep = istep + 1
        enddo
        call mpas_timer_stop('mp_tempo')
-       
+
     case ("mp_thompson")
        call mpas_timer_start('mp_thompson')
        istep = 1
@@ -938,7 +940,7 @@
           graupelncv(i) = 0._RKIND
           sr(i)         = 0._RKIND
        enddo
-       
+
        IF ( microp_scheme == "mp_nssl2m" ) THEN
        do j = jts, jte
        do i = its, ite
@@ -1020,7 +1022,7 @@
  call mpas_pool_get_array(diag_physics,'hailnc' ,hailnc )
  call mpas_pool_get_array(diag_physics,'hailncv',hailncv)
  ENDIF
- 
+
  do i = its,ite
     precipw(i) = 0._RKIND
  enddo
@@ -1202,7 +1204,7 @@
 
        if(allocated(dBz1d)) deallocate(dBZ1d)
        if(allocated(zp)   ) deallocate(zp   )
-       
+
     case ("mp_wsm6")
        if(.not.allocated(p1d)  ) allocate(p1d(kts:kte)  )
        if(.not.allocated(t1d)  ) allocate(t1d(kts:kte)  )
@@ -1459,6 +1461,229 @@ end subroutine compute_accumulated_max_hail
  if(allocated(qvs1d)) deallocate(qvs1d)
 
  end subroutine compute_relhum
+
+!=================================================================================================================
+ subroutine init_reflectivity_diagnostic(configs,state,time_lev,diag_physics,diag,mesh)
+!=================================================================================================================
+!
+! Compute radar reflectivity at initial time using the initial atmospheric state.
+! This subroutine extracts reflectivity from microphysics fields without running the full physics driver.
+!
+!=================================================================================================================
+
+!input arguments:
+ type(mpas_pool_type),intent(in):: configs,state,mesh
+ integer,intent(in):: time_lev
+
+!inout arguments:
+ type(mpas_pool_type),intent(inout):: diag_physics,diag
+
+!local pointers:
+ character(len=StrKIND),pointer:: microp_scheme
+ real(kind=RKIND),dimension(:,:),pointer:: refl10cm,refl10cm_p
+ real(kind=RKIND),dimension(:),pointer:: refl10cm_max,refl10cm_1km,refl10cm_1km_max
+ real(kind=RKIND),dimension(:,:),pointer:: theta_m,rho_zz
+ real(kind=RKIND),dimension(:,:,:),pointer:: scalars
+ real(kind=RKIND),dimension(:,:),pointer:: zgrid
+ real(kind=RKIND),dimension(:,:),pointer:: pressure_p,pressure_base
+ integer,pointer:: nCells,nVertLevels,nVertLevelsP1,index_qv,index_qc,index_qr,index_qs,index_qg
+
+!local variables and arrays:
+ integer:: iCell,k,kp
+ real(kind=RKIND),dimension(:),allocatable:: qv1d,qc1d,qr1d,qs1d,qg1d,t1d,p1d,dBZ1d,zp
+ real(kind=RKIND):: w1,w2,z_agl,pi_term,rho_term
+
+!-----------------------------------------------------------------------------------------------------------------
+
+ call mpas_pool_get_config(configs,'config_microp_scheme',microp_scheme)
+
+ call mpas_pool_get_dimension(mesh,'nCells',nCells)
+ call mpas_pool_get_dimension(mesh,'nVertLevels',nVertLevels)
+ call mpas_pool_get_dimension(mesh,'nVertLevelsP1',nVertLevelsP1)
+ call mpas_pool_get_dimension(state,'index_qv',index_qv)
+ call mpas_pool_get_dimension(state,'index_qc',index_qc)
+ call mpas_pool_get_dimension(state,'index_qr',index_qr)
+ call mpas_pool_get_dimension(state,'index_qs',index_qs)
+ call mpas_pool_get_dimension(state,'index_qg',index_qg)
+
+ call mpas_pool_get_array(state,'theta_m',theta_m,time_lev)
+ call mpas_pool_get_array(state,'rho_zz',rho_zz,time_lev)
+ call mpas_pool_get_array(state,'scalars',scalars,time_lev)
+ call mpas_pool_get_array(mesh,'zgrid',zgrid)
+ call mpas_pool_get_array(diag,'pressure_p',pressure_p)
+ call mpas_pool_get_array(diag,'pressure_base',pressure_base)
+
+ call mpas_pool_get_array(diag_physics,'refl10cm',refl10cm)
+ call mpas_pool_get_array(diag_physics,'refl10cm_max',refl10cm_max)
+ call mpas_pool_get_array(diag_physics,'refl10cm_1km',refl10cm_1km)
+ call mpas_pool_get_array(diag_physics,'refl10cm_1km_max',refl10cm_1km_max)
+
+ ! Initialize reflectivity arrays
+ refl10cm(:,:) = -35._RKIND
+ refl10cm_max(:) = -35._RKIND
+ refl10cm_1km(:) = -35._RKIND
+ refl10cm_1km_max(:) = -35._RKIND
+
+ microp_select: select case(trim(microp_scheme))
+    case ("mp_wsm6")
+       allocate(qv1d(1:nVertLevels) )
+       allocate(qc1d(1:nVertLevels) )
+       allocate(qr1d(1:nVertLevels) )
+       allocate(qs1d(1:nVertLevels) )
+       allocate(qg1d(1:nVertLevels) )
+       allocate(t1d(1:nVertLevels)  )
+       allocate(p1d(1:nVertLevels)  )
+       allocate(dBZ1d(1:nVertLevels))
+       allocate(zp(1:nVertLevels)   )
+
+       do iCell=1,nCells
+          do k=1,nVertLevels
+             ! Calculate pressure at full levels
+             p1d(k)  = pressure_base(k,iCell) + pressure_p(k,iCell)
+             ! Calculate temperature from theta_m
+             pi_term = (p1d(k)/100000.0_RKIND)**(287.0_RKIND/1003.5_RKIND)
+             t1d(k)  = (theta_m(k,iCell) / (1._RKIND + (1._RKIND/0.608_RKIND)*scalars(index_qv,k,iCell))) * pi_term
+             ! Extract mixing ratios
+             qv1d(k) = scalars(index_qv,k,iCell)
+             qc1d(k) = 0._RKIND
+             if(index_qc > 0) qc1d(k) = scalars(index_qc,k,iCell)
+             qr1d(k) = 0._RKIND
+             if(index_qr > 0) qr1d(k) = scalars(index_qr,k,iCell)
+             qs1d(k) = 0._RKIND
+             if(index_qs > 0) qs1d(k) = scalars(index_qs,k,iCell)
+             qg1d(k) = 0._RKIND
+             if(index_qg > 0) qg1d(k) = scalars(index_qg,k,iCell)
+             ! Height AGL
+             zp(k) = 0.5_RKIND*(zgrid(k,iCell)+zgrid(k+1,iCell)) - zgrid(1,iCell)
+             dBZ1d(k) = -35._RKIND
+          enddo
+
+          ! Call reflectivity calculation
+          call refl10cm_wsm6(qv1d,qr1d,qs1d,qg1d,t1d,p1d,dBZ1d,1,nVertLevels)
+
+          ! Copy results to arrays
+          kp = 1
+          do k=1,nVertLevels
+             dBZ1d(k) = max(-35._RKIND,dBZ1d(k))
+             refl10cm(k,iCell) = dBZ1d(k)
+             if(zp(k) < 1000._RKIND) kp = k
+          enddo
+          refl10cm_max(iCell) = maxval(dBZ1d(:))
+
+          ! Interpolate to 1 km AGL
+          if(kp+1 <= nVertLevels .and. zp(kp+1) > zp(kp)) then
+             w1 = (zp(kp+1)-1000._RKIND)/(zp(kp+1)-zp(kp))
+             w2 = 1.0_RKIND - w1
+             refl10cm_1km(iCell) = w1*dBZ1d(kp) + w2*dBZ1d(kp+1)
+          else
+             refl10cm_1km(iCell) = refl10cm_max(iCell)
+          endif
+          refl10cm_1km_max(iCell) = refl10cm_1km(iCell)
+       enddo
+
+       deallocate(qv1d )
+       deallocate(qc1d )
+       deallocate(qr1d )
+       deallocate(qs1d )
+       deallocate(qg1d )
+       deallocate(t1d  )
+       deallocate(p1d  )
+       deallocate(dBZ1d)
+       deallocate(zp   )
+
+    case ("mp_nssl2m")
+       ! NSSL 2-moment microphysics using NSSL-specific reflectivity formulas
+       ! These use the exact gamma-distributed size distributions and proper
+       ! dielectric constants for NSSL hydrometeor properties.
+       allocate(qv1d(1:nVertLevels) )
+       allocate(qr1d(1:nVertLevels) )
+       allocate(qs1d(1:nVertLevels) )
+       allocate(qg1d(1:nVertLevels) )
+       allocate(t1d(1:nVertLevels)  )
+       allocate(p1d(1:nVertLevels)  )
+       allocate(dBZ1d(1:nVertLevels))
+       allocate(zp(1:nVertLevels)   )
+
+       do iCell=1,nCells
+          do k=1,nVertLevels
+             ! Calculate pressure at full levels
+             p1d(k)  = pressure_base(k,iCell) + pressure_p(k,iCell)
+             ! Calculate temperature from theta_m
+             pi_term = (p1d(k)/100000.0_RKIND)**(287.0_RKIND/1003.5_RKIND)
+             t1d(k)  = (theta_m(k,iCell) / (1._RKIND + (1._RKIND/0.608_RKIND)*scalars(index_qv,k,iCell))) * pi_term
+             ! Extract mixing ratios (NSSL has qr, qs, qg)
+             qv1d(k) = scalars(index_qv,k,iCell)
+             qr1d(k) = 0._RKIND
+             if(index_qr > 0) qr1d(k) = scalars(index_qr,k,iCell)
+             qs1d(k) = 0._RKIND
+             if(index_qs > 0) qs1d(k) = scalars(index_qs,k,iCell)
+             qg1d(k) = 0._RKIND
+             if(index_qg > 0) qg1d(k) = scalars(index_qg,k,iCell)
+             ! Height AGL
+             zp(k) = 0.5_RKIND*(zgrid(k,iCell)+zgrid(k+1,iCell)) - zgrid(1,iCell)
+             dBZ1d(k) = -35._RKIND
+          enddo
+
+          ! Call NSSL-MP-specific reflectivity calculation
+          ! Uses gamma-distributed size distributions and NSSL dielectric properties
+          do k=1,nVertLevels
+             call compute_nssl_reflectivity( &
+                 qr=qr1d(k), qc=0.0_RKIND, qi=0.0_RKIND, qs=qs1d(k), &
+                 qh=qg1d(k), qhl=0.0_RKIND, &
+                 nr=1.0e7_RKIND, ni=0.0_RKIND, ns=1.0e6_RKIND, &
+                 nh=1.0e5_RKIND, nhl=0.0_RKIND, &
+                 rho_air=rho_zz(k,iCell), temp=t1d(k), &
+                 ipconc=5, idbzci=0, &
+                 dbz=dBZ1d(k) )
+          enddo
+
+          ! Copy results to arrays
+          kp = 1
+          do k=1,nVertLevels
+             dBZ1d(k) = max(-35._RKIND,dBZ1d(k))
+             refl10cm(k,iCell) = dBZ1d(k)
+             if(zp(k) < 1000._RKIND) kp = k
+          enddo
+          refl10cm_max(iCell) = maxval(dBZ1d(:))
+
+          ! Interpolate to 1 km AGL
+          if(kp+1 <= nVertLevels .and. zp(kp+1) > zp(kp)) then
+             w1 = (zp(kp+1)-1000._RKIND)/(zp(kp+1)-zp(kp))
+             w2 = 1.0_RKIND - w1
+             refl10cm_1km(iCell) = w1*dBZ1d(kp) + w2*dBZ1d(kp+1)
+          else
+             refl10cm_1km(iCell) = refl10cm_max(iCell)
+          endif
+          refl10cm_1km_max(iCell) = refl10cm_1km(iCell)
+       enddo
+
+       deallocate(qv1d )
+       deallocate(qr1d )
+       deallocate(qs1d )
+       deallocate(qg1d )
+       deallocate(t1d  )
+       deallocate(p1d  )
+       deallocate(dBZ1d)
+       deallocate(zp   )
+
+    case ("mp_thompson")
+       ! Thompson microphysics - reflectivity computed during physics call
+       ! For now, initialize to -35 dBZ as placeholder
+       refl10cm(:,:) = -35._RKIND
+       refl10cm_max(:) = -35._RKIND
+       refl10cm_1km(:) = -35._RKIND
+       refl10cm_1km_max(:) = -35._RKIND
+
+    case default
+       ! For other schemes, initialize to -35 dBZ
+       refl10cm(:,:) = -35._RKIND
+       refl10cm_max(:) = -35._RKIND
+       refl10cm_1km(:) = -35._RKIND
+       refl10cm_1km_max(:) = -35._RKIND
+
+ end select microp_select
+
+ end subroutine init_reflectivity_diagnostic
 
 !=================================================================================================================
  end module mpas_atmphys_driver_microphysics
