@@ -25,9 +25,8 @@
  use module_mp_tempo_driver,only: tempo_init,tempo_run,ty_tempo_driver_diags,tempo_aerosol_surface_emissions
  use module_mp_wsm6,only: wsm6
  use mp_wsm6,only: mp_wsm6_init,refl10cm_wsm6
- use module_mp_nssl_2mom, only : nssl_2mom_driver
+ use module_mp_nssl_2mom, only : nssl_2mom_driver, nssl_column_dbz
  use mp_nssl, only: mp_nssl_init
- use nssl_reflectivity_calculations, only: compute_nssl_reflectivity
 
  implicit none
  private
@@ -1482,16 +1481,28 @@ end subroutine compute_accumulated_max_hail
  character(len=StrKIND),pointer:: microp_scheme
  real(kind=RKIND),dimension(:,:),pointer:: refl10cm,refl10cm_p
  real(kind=RKIND),dimension(:),pointer:: refl10cm_max,refl10cm_1km,refl10cm_1km_max
- real(kind=RKIND),dimension(:,:),pointer:: theta_m,rho_zz
+ real(kind=RKIND),dimension(:,:),pointer:: theta_m,rho
  real(kind=RKIND),dimension(:,:,:),pointer:: scalars
  real(kind=RKIND),dimension(:,:),pointer:: zgrid
  real(kind=RKIND),dimension(:,:),pointer:: pressure_p,pressure_base
- integer,pointer:: nCells,nVertLevels,nVertLevelsP1,index_qv,index_qc,index_qr,index_qs,index_qg
+ integer,pointer:: nCells,nVertLevels,nVertLevelsP1,index_qv,index_qc,index_qr,index_qs,index_qg,index_nr
+
+!local pointers for NSSL:
+ integer,pointer:: index_qi,index_nc,index_ni,index_ns,index_ng
+ integer,pointer:: index_qh,index_nh,index_volg,index_volh
+ integer,pointer:: index_zrw,index_zgw,index_zhw
+ logical,pointer:: config_nssl_hail_on,config_nssl_3moment
+ real(kind=RKIND),dimension(:,:),pointer:: exner
 
 !local variables and arrays:
  integer:: iCell,k,kp
- real(kind=RKIND),dimension(:),allocatable:: qv1d,qc1d,qr1d,qs1d,qg1d,t1d,p1d,dBZ1d,zp
+ real(kind=RKIND),dimension(:),allocatable:: qv1d,qc1d,qr1d,nr1d,qs1d,qg1d,t1d,p1d,dBZ1d,zp
  real(kind=RKIND):: w1,w2,z_agl,pi_term,rho_term
+!local arrays for NSSL column wrapper:
+ real,dimension(:),allocatable:: nssl_qc,nssl_qr,nssl_qi,nssl_qs,nssl_qh,nssl_qhl
+ real,dimension(:),allocatable:: nssl_ccw,nssl_crw,nssl_cci,nssl_csw,nssl_chw,nssl_chl
+ real,dimension(:),allocatable:: nssl_vhw,nssl_vhl,nssl_zrw,nssl_zhw,nssl_zhl
+ real,dimension(:),allocatable:: nssl_pb,nssl_tb, nssl_rho, nssl_dbz
 
 !-----------------------------------------------------------------------------------------------------------------
 
@@ -1505,9 +1516,10 @@ end subroutine compute_accumulated_max_hail
  call mpas_pool_get_dimension(state,'index_qr',index_qr)
  call mpas_pool_get_dimension(state,'index_qs',index_qs)
  call mpas_pool_get_dimension(state,'index_qg',index_qg)
+ call mpas_pool_get_dimension(state,'index_nr',index_nr)
 
  call mpas_pool_get_array(state,'theta_m',theta_m,time_lev)
- call mpas_pool_get_array(state,'rho_zz',rho_zz,time_lev)
+ call mpas_pool_get_array(diag,'rho',rho)
  call mpas_pool_get_array(state,'scalars',scalars,time_lev)
  call mpas_pool_get_array(mesh,'zgrid',zgrid)
  call mpas_pool_get_array(diag,'pressure_p',pressure_p)
@@ -1591,12 +1603,16 @@ end subroutine compute_accumulated_max_hail
        deallocate(dBZ1d)
        deallocate(zp   )
 
-    case ("mp_nssl2m")
-       ! NSSL 2-moment microphysics using NSSL-specific reflectivity formulas
-       ! These use the exact gamma-distributed size distributions and proper
-       ! dielectric constants for NSSL hydrometeor properties.
+    case ("mp_tempo")
+       ! TEMPO microphysics - use Thompson reflectivity formula since TEMPO is
+       ! derived from Thompson and uses the same hydrometeor species.
+       ! Must initialize Thompson module constants (cre, crg, cse, cge, etc.)
+       ! that calc_refl10cm depends on. Pass .false. to skip reading lookup tables.
+       call thompson_init(.false.)
        allocate(qv1d(1:nVertLevels) )
+       allocate(qc1d(1:nVertLevels) )
        allocate(qr1d(1:nVertLevels) )
+       allocate(nr1d(1:nVertLevels) )
        allocate(qs1d(1:nVertLevels) )
        allocate(qg1d(1:nVertLevels) )
        allocate(t1d(1:nVertLevels)  )
@@ -1611,31 +1627,37 @@ end subroutine compute_accumulated_max_hail
              ! Calculate temperature from theta_m
              pi_term = (p1d(k)/100000.0_RKIND)**(287.0_RKIND/1003.5_RKIND)
              t1d(k)  = (theta_m(k,iCell) / (1._RKIND + (1._RKIND/0.608_RKIND)*scalars(index_qv,k,iCell))) * pi_term
-             ! Extract mixing ratios (NSSL has qr, qs, qg)
+             ! Extract mixing ratios
              qv1d(k) = scalars(index_qv,k,iCell)
+             qc1d(k) = 0._RKIND
+             if(index_qc > 0) qc1d(k) = scalars(index_qc,k,iCell)
              qr1d(k) = 0._RKIND
              if(index_qr > 0) qr1d(k) = scalars(index_qr,k,iCell)
+             nr1d(k) = 0._RKIND
+             if(index_nr > 0) nr1d(k) = scalars(index_nr,k,iCell)
              qs1d(k) = 0._RKIND
              if(index_qs > 0) qs1d(k) = scalars(index_qs,k,iCell)
              qg1d(k) = 0._RKIND
              if(index_qg > 0) qg1d(k) = scalars(index_qg,k,iCell)
+             ! Estimate nr from qr when nr is zero, following Thompson's own
+             ! convention (mp_gt_driver lines 1723-1726): assume median volume
+             ! diameter (MVD) = 1 mm, then derive nr from the gamma DSD.
+             ! With mu_r=0, bm_r=3, am_r=pi*rho_w/6:
+             !   lamr = (3 + mu_r + 0.672)/MVD = 3.672/0.001 = 3672
+             !   nr_vol = Gamma(mu_r+1)/Gamma(bm_r+mu_r+1) * rr * lamr^bm_r / am_r
+             !          = (1/6) * qr*rho * 3672^3 / (pi*1000/6)
+             !   nr1d (per kg) = nr_vol/rho = qr * 3672^3 / (6 * pi*1000/6)
+             !                 = qr * 4.951e10 / (pi*1000) = qr * 1.576e7
+             if(qr1d(k) .gt. 1.e-12_RKIND .and. nr1d(k) .le. 0._RKIND) then
+                nr1d(k) = qr1d(k) * 1.576e7_RKIND
+             endif
              ! Height AGL
              zp(k) = 0.5_RKIND*(zgrid(k,iCell)+zgrid(k+1,iCell)) - zgrid(1,iCell)
              dBZ1d(k) = -35._RKIND
           enddo
 
-          ! Call NSSL-MP-specific reflectivity calculation
-          ! Uses gamma-distributed size distributions and NSSL dielectric properties
-          do k=1,nVertLevels
-             call compute_nssl_reflectivity( &
-                 qr=qr1d(k), qc=0.0_RKIND, qi=0.0_RKIND, qs=qs1d(k), &
-                 qh=qg1d(k), qhl=0.0_RKIND, &
-                 nr=1.0e7_RKIND, ni=0.0_RKIND, ns=1.0e6_RKIND, &
-                 nh=1.0e5_RKIND, nhl=0.0_RKIND, &
-                 rho_air=rho_zz(k,iCell), temp=t1d(k), &
-                 ipconc=5, idbzci=0, &
-                 dbz=dBZ1d(k) )
-          enddo
+          ! Call Thompson reflectivity calculation (TEMPO is Thompson-derived)
+          call calc_refl10cm(qv1d,qc1d,qr1d,nr1d,qs1d,qg1d,t1d,p1d,dBZ1d,1,nVertLevels,iCell,1)
 
           ! Copy results to arrays
           kp = 1
@@ -1658,7 +1680,9 @@ end subroutine compute_accumulated_max_hail
        enddo
 
        deallocate(qv1d )
+       deallocate(qc1d )
        deallocate(qr1d )
+       deallocate(nr1d )
        deallocate(qs1d )
        deallocate(qg1d )
        deallocate(t1d  )
@@ -1666,13 +1690,243 @@ end subroutine compute_accumulated_max_hail
        deallocate(dBZ1d)
        deallocate(zp   )
 
-    case ("mp_thompson")
-       ! Thompson microphysics - reflectivity computed during physics call
-       ! For now, initialize to -35 dBZ as placeholder
-       refl10cm(:,:) = -35._RKIND
-       refl10cm_max(:) = -35._RKIND
-       refl10cm_1km(:) = -35._RKIND
-       refl10cm_1km_max(:) = -35._RKIND
+    case ("mp_nssl2m")
+       ! NSSL 2-moment microphysics - use nssl_column_dbz from the NSSL-MP module
+       ! for accurate reflectivity using exact gamma-distributed size distributions.
+       ! Processes a full column at once (one call to calcnfromq + radardd02 per column).
+       call mpas_pool_get_config(configs,'config_nssl_hail_on',config_nssl_hail_on)
+       call mpas_pool_get_config(configs,'config_nssl_3moment',config_nssl_3moment)
+
+       call mpas_pool_get_dimension(state,'index_qi',index_qi)
+       call mpas_pool_get_dimension(state,'index_nc',index_nc)
+       call mpas_pool_get_dimension(state,'index_ni',index_ni)
+       call mpas_pool_get_dimension(state,'index_ns',index_ns)
+       call mpas_pool_get_dimension(state,'index_ng',index_ng)
+       call mpas_pool_get_dimension(state,'index_volg',index_volg)
+       if(config_nssl_hail_on) then
+          call mpas_pool_get_dimension(state,'index_qh',index_qh)
+          call mpas_pool_get_dimension(state,'index_nh',index_nh)
+          call mpas_pool_get_dimension(state,'index_volh',index_volh)
+       endif
+       if(config_nssl_3moment) then
+          call mpas_pool_get_dimension(state,'index_zrw',index_zrw)
+          call mpas_pool_get_dimension(state,'index_zgw',index_zgw)
+          if(config_nssl_hail_on) then
+             call mpas_pool_get_dimension(state,'index_zhw',index_zhw)
+          endif
+       endif
+
+       call mpas_pool_get_array(diag,'exner',exner)
+
+       allocate(zp(1:nVertLevels)      )
+       allocate(nssl_qc(1:nVertLevels) )
+       allocate(nssl_qr(1:nVertLevels) )
+       allocate(nssl_qi(1:nVertLevels) )
+       allocate(nssl_qs(1:nVertLevels) )
+       allocate(nssl_qh(1:nVertLevels) )
+       allocate(nssl_qhl(1:nVertLevels))
+       allocate(nssl_ccw(1:nVertLevels))
+       allocate(nssl_crw(1:nVertLevels))
+       allocate(nssl_cci(1:nVertLevels))
+       allocate(nssl_csw(1:nVertLevels))
+       allocate(nssl_chw(1:nVertLevels))
+       allocate(nssl_chl(1:nVertLevels))
+       allocate(nssl_vhw(1:nVertLevels))
+       allocate(nssl_vhl(1:nVertLevels))
+       allocate(nssl_zrw(1:nVertLevels))
+       allocate(nssl_zhw(1:nVertLevels))
+       allocate(nssl_zhl(1:nVertLevels))
+       allocate(nssl_rho(1:nVertLevels))
+       allocate(nssl_pb(1:nVertLevels) )
+       allocate(nssl_tb(1:nVertLevels) )
+       allocate(nssl_dbz(1:nVertLevels))
+
+       do iCell=1,nCells
+          do k=1,nVertLevels
+             ! Dry potential temperature: theta = theta_m / (1 + Rv/Rd * qv)
+             nssl_tb(k) = real(theta_m(k,iCell) / (1._RKIND + (1._RKIND/0.608_RKIND)*scalars(index_qv,k,iCell)))
+             ! Exner function
+             nssl_pb(k) = real(exner(k,iCell))
+             nssl_rho(k) = real(rho(k,iCell))
+
+             ! Mixing ratios
+             nssl_qc(k)  = 0.0
+             nssl_qr(k)  = 0.0
+             nssl_qi(k)  = 0.0
+             nssl_qs(k)  = 0.0
+             nssl_qh(k)  = 0.0
+             nssl_qhl(k) = 0.0
+             if(index_qc > 0) nssl_qc(k)  = real(scalars(index_qc,k,iCell))
+             if(index_qr > 0) nssl_qr(k)  = real(scalars(index_qr,k,iCell))
+             if(index_qi > 0) nssl_qi(k)  = real(scalars(index_qi,k,iCell))
+             if(index_qs > 0) nssl_qs(k)  = real(scalars(index_qs,k,iCell))
+             if(index_qg > 0) nssl_qh(k)  = real(scalars(index_qg,k,iCell))  ! NSSL qh = MPAS graupel
+             if(config_nssl_hail_on) then
+                if(index_qh > 0) nssl_qhl(k) = real(scalars(index_qh,k,iCell))  ! NSSL qhl = MPAS hail
+             endif
+
+             ! Number concentrations
+             nssl_ccw(k) = 0.0
+             nssl_crw(k) = 0.0
+             nssl_cci(k) = 0.0
+             nssl_csw(k) = 0.0
+             nssl_chw(k) = 0.0
+             nssl_chl(k) = 0.0
+             if(index_nc > 0) nssl_ccw(k) = real(scalars(index_nc,k,iCell))
+             if(index_nr > 0) nssl_crw(k) = real(scalars(index_nr,k,iCell))
+             if(index_ni > 0) nssl_cci(k) = real(scalars(index_ni,k,iCell))
+             if(index_ns > 0) nssl_csw(k) = real(scalars(index_ns,k,iCell))
+             if(index_ng > 0) nssl_chw(k) = real(scalars(index_ng,k,iCell))  ! NSSL chw = MPAS graupel number
+             if(config_nssl_hail_on) then
+                if(index_nh > 0) nssl_chl(k) = real(scalars(index_nh,k,iCell))  ! NSSL chl = MPAS hail number
+             endif
+
+             ! Volume mixing ratios
+             nssl_vhw(k) = 0.0
+             nssl_vhl(k) = 0.0
+             if(index_volg > 0) nssl_vhw(k) = real(scalars(index_volg,k,iCell))
+             if(config_nssl_hail_on) then
+                if(index_volh > 0) nssl_vhl(k) = real(scalars(index_volh,k,iCell))
+             endif
+
+             ! Reflectivity moments (3-moment only)
+             nssl_zrw(k) = 0.0
+             nssl_zhw(k) = 0.0
+             nssl_zhl(k) = 0.0
+             if(config_nssl_3moment) then
+                if(index_zrw > 0) nssl_zrw(k) = real(scalars(index_zrw,k,iCell))
+                if(index_zgw > 0) nssl_zhw(k) = real(scalars(index_zgw,k,iCell))
+                if(config_nssl_hail_on) then
+                   if(index_zhw > 0) nssl_zhl(k) = real(scalars(index_zhw,k,iCell))
+                endif
+             endif
+
+             ! Height AGL
+             zp(k) = 0.5_RKIND*(zgrid(k,iCell)+zgrid(k+1,iCell)) - zgrid(1,iCell)
+          enddo
+
+          ! Call nssl_column_dbz for the entire column at once
+          call nssl_column_dbz(nVertLevels,                               &
+                            nssl_qc, nssl_qr, nssl_qi,                    &
+                            nssl_qs, nssl_qh, nssl_qhl,                   &
+                            nssl_ccw, nssl_crw, nssl_cci,                  &
+                            nssl_csw, nssl_chw, nssl_chl,                  &
+                            nssl_vhw, nssl_vhl,                            &
+                            nssl_zrw, nssl_zhw, nssl_zhl,                  &
+                            nssl_pb, nssl_tb, nssl_rho, nssl_dbz )
+
+          ! Copy results to arrays
+          kp = 1
+          do k=1,nVertLevels
+             refl10cm(k,iCell) = max(-35._RKIND, real(nssl_dbz(k),RKIND))
+             if(zp(k) < 1000._RKIND) kp = k
+          enddo
+          refl10cm_max(iCell) = maxval(refl10cm(:,iCell))
+
+          ! Interpolate to 1 km AGL
+          if(kp+1 <= nVertLevels .and. zp(kp+1) > zp(kp)) then
+             w1 = (zp(kp+1)-1000._RKIND)/(zp(kp+1)-zp(kp))
+             w2 = 1.0_RKIND - w1
+             refl10cm_1km(iCell) = w1*refl10cm(kp,iCell) + w2*refl10cm(kp+1,iCell)
+          else
+             refl10cm_1km(iCell) = refl10cm_max(iCell)
+          endif
+          refl10cm_1km_max(iCell) = refl10cm_1km(iCell)
+       enddo
+
+       deallocate(zp      )
+       deallocate(nssl_rho )
+       deallocate(nssl_qc )
+       deallocate(nssl_qr )
+       deallocate(nssl_qi )
+       deallocate(nssl_qs )
+       deallocate(nssl_qh )
+       deallocate(nssl_qhl)
+       deallocate(nssl_ccw)
+       deallocate(nssl_crw)
+       deallocate(nssl_cci)
+       deallocate(nssl_csw)
+       deallocate(nssl_chw)
+       deallocate(nssl_chl)
+       deallocate(nssl_vhw)
+       deallocate(nssl_vhl)
+       deallocate(nssl_zrw)
+       deallocate(nssl_zhw)
+       deallocate(nssl_zhl)
+       deallocate(nssl_pb )
+       deallocate(nssl_tb )
+       deallocate(nssl_dbz)
+
+    case ("mp_thompson","mp_thompson_aerosols")
+       ! Thompson microphysics - use calc_refl10cm for reflectivity calculation.
+       allocate(qv1d(1:nVertLevels) )
+       allocate(qc1d(1:nVertLevels) )
+       allocate(qr1d(1:nVertLevels) )
+       allocate(nr1d(1:nVertLevels) )
+       allocate(qs1d(1:nVertLevels) )
+       allocate(qg1d(1:nVertLevels) )
+       allocate(t1d(1:nVertLevels)  )
+       allocate(p1d(1:nVertLevels)  )
+       allocate(dBZ1d(1:nVertLevels))
+       allocate(zp(1:nVertLevels)   )
+
+       do iCell=1,nCells
+          do k=1,nVertLevels
+             ! Calculate pressure at full levels
+             p1d(k)  = pressure_base(k,iCell) + pressure_p(k,iCell)
+             ! Calculate temperature from theta_m
+             pi_term = (p1d(k)/100000.0_RKIND)**(287.0_RKIND/1003.5_RKIND)
+             t1d(k)  = (theta_m(k,iCell) / (1._RKIND + (1._RKIND/0.608_RKIND)*scalars(index_qv,k,iCell))) * pi_term
+             ! Extract mixing ratios
+             qv1d(k) = scalars(index_qv,k,iCell)
+             qc1d(k) = 0._RKIND
+             if(index_qc > 0) qc1d(k) = scalars(index_qc,k,iCell)
+             qr1d(k) = 0._RKIND
+             if(index_qr > 0) qr1d(k) = scalars(index_qr,k,iCell)
+             nr1d(k) = 0._RKIND
+             if(index_nr > 0) nr1d(k) = scalars(index_nr,k,iCell)
+             qs1d(k) = 0._RKIND
+             if(index_qs > 0) qs1d(k) = scalars(index_qs,k,iCell)
+             qg1d(k) = 0._RKIND
+             if(index_qg > 0) qg1d(k) = scalars(index_qg,k,iCell)
+             ! Height AGL
+             zp(k) = 0.5_RKIND*(zgrid(k,iCell)+zgrid(k+1,iCell)) - zgrid(1,iCell)
+             dBZ1d(k) = -35._RKIND
+          enddo
+
+          ! Call Thompson reflectivity calculation
+          call calc_refl10cm(qv1d,qc1d,qr1d,nr1d,qs1d,qg1d,t1d,p1d,dBZ1d,1,nVertLevels,iCell,1)
+
+          ! Copy results to arrays
+          kp = 1
+          do k=1,nVertLevels
+             dBZ1d(k) = max(-35._RKIND,dBZ1d(k))
+             refl10cm(k,iCell) = dBZ1d(k)
+             if(zp(k) < 1000._RKIND) kp = k
+          enddo
+          refl10cm_max(iCell) = maxval(dBZ1d(:))
+
+          ! Interpolate to 1 km AGL
+          if(kp+1 <= nVertLevels .and. zp(kp+1) > zp(kp)) then
+             w1 = (zp(kp+1)-1000._RKIND)/(zp(kp+1)-zp(kp))
+             w2 = 1.0_RKIND - w1
+             refl10cm_1km(iCell) = w1*dBZ1d(kp) + w2*dBZ1d(kp+1)
+          else
+             refl10cm_1km(iCell) = refl10cm_max(iCell)
+          endif
+          refl10cm_1km_max(iCell) = refl10cm_1km(iCell)
+       enddo
+
+       deallocate(qv1d )
+       deallocate(qc1d )
+       deallocate(qr1d )
+       deallocate(nr1d )
+       deallocate(qs1d )
+       deallocate(qg1d )
+       deallocate(t1d  )
+       deallocate(p1d  )
+       deallocate(dBZ1d)
+       deallocate(zp   )
 
     case default
        ! For other schemes, initialize to -35 dBZ
