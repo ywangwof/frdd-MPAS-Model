@@ -4441,6 +4441,8 @@ module init_atm_cases
       call mpas_pool_get_dimension(state, 'index_nr', index_nr)
       call mpas_pool_get_dimension(state, 'index_ns', index_ns)
       call mpas_pool_get_dimension(state, 'index_ng', index_ng)
+
+      nullify(smoke_fine_fg, dust_fine_fg, dust_coarse_fg)
 ! Chemistry
       if ( config_smoke_scheme .ne. 'off' ) then
          call mpas_pool_get_dimension(state, 'index_smoke_fine',index_smoke_fine)
@@ -8009,6 +8011,8 @@ call mpas_log_write('Done with soil consistency check')
       call mpas_pool_get_dimension(lbc_state, 'index_lbc_nr', index_nr)
       call mpas_pool_get_dimension(lbc_state, 'index_lbc_ns', index_ns)
       call mpas_pool_get_dimension(lbc_state, 'index_lbc_ng', index_ng)
+
+      nullify(smoke_fine_fg, dust_fine_fg, dust_coarse_fg)
 ! Chemistry
       if ( config_smoke_scheme .ne. 'off' ) then
          call mpas_pool_get_dimension(lbc_state, 'index_lbc_smoke_fine', index_smoke_fine)
